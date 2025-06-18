@@ -1,31 +1,71 @@
-# Algoritmo de Recomendação Musical com Spotify e PySpark
+rom pyspark.sql import SparkSession
+from pyspark.sql.functions import to_timestamp, hour, dayofmonth, avg
+from pyspark.sql.types import StructType, StructField, StringType, FloatType
+import requests
 
-Este projeto resolve o problema: **"Não sei qual meu gosto musical preferido."**  
-Criamos um algoritmo com dados do Spotify para identificar músicas com as quais o usuário mais se identifica.
+# Inicializa a SparkSession
+spark = SparkSession.builder \
+    .appName("MeteorologicalDataAnalysis") \
+    .getOrCreate()
 
-## 🧠 Problema
-Muitas pessoas não conseguem definir seus gostos musicais. Isso prejudica o uso de plataformas como o Spotify que dependem de preferências claras.
+# URL da API Open-Meteo (exemplo para Berlim)
+# Você pode ajustar a latitude e longitude conforme necessário
+api_url = "https://api.open-meteo.com/v1/forecast?latitude=52.52&longitude=13.41&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m"
 
-## 💡 Solução
-Usamos a API do Spotify para coletar as músicas mais ouvidas de um usuário e tratamos os dados com PySpark. Com isso, conseguimos visualizar padrões de popularidade e preferências.
+# Faz a requisição à API
+response = requests.get(api_url)
+data = response.json()
 
-## 🔧 Tecnologias
-- Python + Google Colab
-- PySpark
-- Spotify Web API
-- Matplotlib
+# Define o schema para o DataFrame Spark
+schema = StructType([
+    StructField("time", StringType(), True),
+    StructField("temperature_2m", FloatType(), True),
+    StructField("relative_humidity_2m", FloatType(), True),
+    StructField("wind_speed_10m", FloatType(), True)
+])
 
-## 📊 Resultado
-Visualização de músicas mais ouvidas com base nas reproduções reais, revelando o estilo musical do usuário com clareza.
+# Extrai os dados horários
+hourly_data = data["hourly"]
 
-## 🔐 Autenticação
-1. Vá até [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) e crie um app.
-2. Coloque este redirect URI: `https://example.com/callback`
-3. Gere seu token manualmente neste site: https://developer.spotify.com/console/get-current-user-top-artists-and-tracks/
-4. Copie o token e cole no notebook quando solicitado.
+# Prepara os dados para o DataFrame Spark
+processed_data = []
+for i in range(len(hourly_data["time"])):
+    processed_data.append({
+        "time": hourly_data["time"][i],
+        "temperature_2m": float(hourly_data["temperature_2m"][i]),
+        "relative_humidity_2m": float(hourly_data["relative_humidity_2m"][i]),
+        "wind_speed_10m": float(hourly_data["wind_speed_10m"][i])
+    })
 
-## 📎 Como rodar
-Abra o notebook `spotify_recommender.ipynb` no [Google Colab](https://colab.research.google.com/) e siga os passos. Ele irá:
-- Autenticar sua conta
-- Coletar suas músicas mais ouvidas
-- Visualizar as mais populares
+# Cria o DataFrame Spark
+df = spark.createDataFrame(processed_data, schema=schema)
+
+# Análise Temporal
+# Converte a coluna 'time' para tipo timestamp
+df_time = df.withColumn("timestamp", to_timestamp("time"))
+
+# Extrai a hora e o dia do mês
+df_time = df_time.withColumn("hour", hour("timestamp")) \
+                   .withColumn("day", dayofmonth("timestamp"))
+
+# Calcula a temperatura média diária
+df_daily_avg = df_time.groupBy("day").agg(
+    avg("temperature_2m").alias("avg_temperature_2m"),
+    avg("relative_humidity_2m").alias("avg_relative_humidity_2m"),
+    avg("wind_speed_10m").alias("avg_wind_speed_10m")
+).orderBy("day")
+
+print("\nDados Horários:")
+df.show()
+
+print("\nDados com Hora e Dia:")
+df_time.show()
+
+print("\nTemperaturas Médias Diárias:")
+df_daily_avg.show()
+
+# Salva o DataFrame em formato Parquet (pode ser alterado para outro formato)
+df.write.mode("overwrite").parquet("/home/ubuntu/weather_data.parquet")
+
+# Para parar a SparkSession (opcional, mas boa prática)
+spark.stop()
